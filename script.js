@@ -68,57 +68,59 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- ★★★ テーブル整形ルール ★★★ ---
-    // 内部の改行や空白を制御し、パイプを揃えることで、きれいに整形されたテーブルを生成します。
-    // セル内の <br> は改行として維持し、それ以外の不要な空白や改行はトリムします。
+    // --- ★★★ テーブル整形ルール (v2) ★★★ ---
+    // thead/tbodyの有無に依存せず、最初の行をヘッダーとして自動解釈する堅牢なルール。
+    // セル内の不要なHTMLタグを除去し、<br>タグは改行として維持します。
     turndownService.addRule('table', {
         filter: 'table',
 
         replacement: function (content, node) {
-            // ヘッダー行とボディ行を抽出
-            const thead = node.querySelector('thead');
-            const tbody = node.querySelector('tbody');
-            if (!thead || !tbody) return content; // theadとtbodyがなければ何もしない
+            /**
+             * セル内のHTMLをクリーンアップし、テキストコンテンツを抽出します。
+             * <br>タグは改行文字 '\n' に変換されます。
+             * @param {Node} cell - <th> または <td> 要素
+             * @returns {string} クリーンアップされたテキスト
+             */
+            function cleanCellContent(cell) {
+                const html = cell.innerHTML.replace(/<br\s*\/?>/gi, '\n');
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = html;
+                return (tempDiv.textContent || tempDiv.innerText || "").trim();
+            }
 
-            const headers = Array.from(thead.rows[0].cells).map(cell => {
-                return cell.innerHTML.replace(/<br\s*\/?>/gi, '\n').trim();
-            });
+            const allRows = Array.from(node.querySelectorAll('tr'));
+            if (allRows.length === 0) return ''; // 行がなければ何もしない
 
-            const rows = Array.from(tbody.rows).map(row => {
-                return Array.from(row.cells).map(cell => {
-                    // <br>を改行文字に変換し、前後の空白をトリム
-                    return cell.innerHTML.replace(/<br\s*\/?>/gi, '\n').trim();
-                });
-            });
+            // 最初の行をヘッダー、残りをボディとして解釈
+            const headerRow = allRows.shift();
+            const headers = Array.from(headerRow.cells).map(cleanCellContent);
+            const bodyRows = allRows.map(row => Array.from(row.cells).map(cleanCellContent));
 
+            // 各列の最大幅を計算
             const colWidths = headers.map((_, i) => {
-                const widths = [headers[i].length].concat(rows.map(row => row[i] ? row[i].split('\n').reduce((max, line) => Math.max(max, line.length), 0) : 0));
-                return Math.max(...widths, 3); // 最低幅3を確保 (---)
+                const headerWidth = headers[i] ? headers[i].split('\n').reduce((max, line) => Math.max(max, line.length), 0) : 0;
+                const bodyWidths = bodyRows.map(row => row[i] ? row[i].split('\n').reduce((max, line) => Math.max(max, line.length), 0) : 0);
+                return Math.max(...[headerWidth].concat(bodyWidths), 3); // 最低幅3 (---) を確保
             });
 
             // ヘッダー行を生成
-            const headerLine = '| ' + headers.map((header, i) => {
-                return header.padEnd(colWidths[i]);
-            }).join(' | ') + ' |';
+            const headerLine = '| ' + headers.map((header, i) => (header || '').padEnd(colWidths[i])).join(' | ') + ' |';
 
             // セパレータ行を生成
-            const separatorLine = '| ' + colWidths.map(width => {
-                return '-'.repeat(width);
-            }).join(' | ') + ' |';
+            const separatorLine = '| ' + colWidths.map(width => '-'.repeat(width)).join(' | ') + ' |';
 
-            // データ行を生成
-            const bodyLines = rows.map(row => {
-                // セルごとの最大行数を計算
-                const maxLines = Math.max(...row.map(cell => cell ? cell.split('\n').length : 1));
-                let lines = [];
-                for(let i = 0; i < maxLines; i++) {
+            // データ行を生成 (複数行セルに対応)
+            const bodyLines = bodyRows.map(row => {
+                const maxLinesInRow = Math.max(1, ...row.map(cell => (cell || '').split('\n').length));
+                let rowOutput = [];
+                for (let i = 0; i < maxLinesInRow; i++) {
                     const line = row.map((cell, j) => {
-                        const cellLines = cell ? cell.split('\n') : [''];
+                        const cellLines = (cell || '').split('\n');
                         return (cellLines[i] || '').padEnd(colWidths[j]);
                     }).join(' | ');
-                    lines.push('| ' + line + ' |');
+                    rowOutput.push('| ' + line + ' |');
                 }
-                return lines.join('\n');
+                return rowOutput.join('\n');
             }).join('\n');
 
             return '\n\n' + headerLine + '\n' + separatorLine + '\n' + bodyLines + '\n\n';
